@@ -23,6 +23,10 @@ local function deep_copy(object)
     return _copy(object)
 end
 
+function matrix.getmetatable()
+    return mat_meta
+end
+
 ---------------- init the matrix --------------------
 local function mat_init()
     local mat = {}

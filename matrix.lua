@@ -1,9 +1,12 @@
 local matrix ={}
 
 local mat_obj = {
-    data = {}
+    data = {},
+    __type = "matrix"
 }
 local mat_meta = {}
+
+local esp = 0.0001
 
 local function deep_copy(object)
     local lookup_table = {}
@@ -23,13 +26,21 @@ local function deep_copy(object)
     return _copy(object)
 end
 
-function matrix.getmetatable()
-    return mat_meta
+local function is_mat(mat)
+    if type(mat) ~= "table" then
+        return false
+    end
+    if type(mat.type) ~= "function" then
+        return false
+    end
+    if mat:type() ~= "matrix" then
+        return false
+    end
+    return true
 end
 
 ---------------- init the matrix --------------------
 local function mat_init()
-    local mat = {}
     return deep_copy(mat_obj)
 end
 
@@ -78,24 +89,48 @@ end
 -----------------------------------------------------
 
 ------------- base function of the matrix -----------
+function mat_obj:type()
+    return tostring(self.__type)
+end
+
 function mat_obj:size()
     local row, column = #self.data, #self.data[1]
     return row, column
 end
 
-function mat_obj:print()
+function mat_meta:__tostring()
     local row, column = self:size()
+    local ret = "["
     for i = 1, row do
-        for j =1, column do
-            io.write(self.data[i][j])
-            io.write(" ")
+        if i ~= 1 then
+            ret = ret .. " "
         end
-        print("")
+        ret = ret .. "["
+        for j = 1, column do
+            ret = ret .. tostring(self.data[i][j])
+            if j ~= column then
+                ret = ret .. " "
+            end
+        end
+        ret = ret .. "]"
+        if i ~= row and column ~= 1 then
+            ret = ret .. "\n"
+        end
     end
+    ret = ret .. "]"
+    return ret
+end
+
+function mat_obj:print()
+    print(tostring(self))
+end
+
+function mat_obj:get(row, column)
+    return self.data[row][column]
 end
 
 function mat_meta:__add(mat)
-    if getmetatable(mat) ~= mat_meta then
+    if is_mat(mat) == false then
         print("[ERROR] matrix can add / sub matrix ONLY.")
         return nil
     end
@@ -119,7 +154,7 @@ function mat_meta:__add(mat)
 end
 
 function mat_meta:__mul(mat_or_num)
-    if getmetatable(mat_or_num) == mat_meta then
+    if is_mat(mat_or_num) == true then
         local self_row, self_column = self:size()
         local mat_row, mat_column = mat_or_num:size()
         if self_column ~= mat_row  then
@@ -149,7 +184,7 @@ function mat_meta:__mul(mat_or_num)
         end
         return ret
     else
-        print("[ERROR] matrix can add matrix or number ONLY.")
+        print("[ERROR] matrix can multiply matrix or number ONLY.")
         return nil
     end
 end
@@ -159,7 +194,7 @@ function mat_meta:__sub(mat)
 end
 
 function mat_meta:__eq(mat)
-    if getmetatable(mat) ~= mat_meta then
+    if is_mat(mat) == false then
         print("[ERROR] matrix can compare with matrix ONLY.")
         return nil
     end
@@ -170,7 +205,7 @@ function mat_meta:__eq(mat)
     else
         for i= 1, self_row, 1 do
             for j = 1, self_column, 1 do
-                if self.data[i][j] ~= mat.data[i][j] then
+                if math.abs(self.data[i][j] - mat.data[i][j]) > esp then
                     return false
                 end
             end
@@ -219,7 +254,7 @@ function mat_obj:pivot()
     return ret
 end
 
-function mat_obj:LUdecompose()
+function mat_obj:LUPdecompose()
     -- PLU decompostion solution
     -- ref: https://en.wikipedia.org/wiki/LU_decomposition
     local self_row, self_column = self:size()
@@ -230,15 +265,61 @@ function mat_obj:LUdecompose()
         )
         return nil
     end
+    local A = deep_copy(self)
     local L = matrix.I(self_row)
     local U = matrix.zeros(self_row, self_column)
+    local P = matrix.I(self_row)
+    local det_P = 1
     for i = 1, self_row, 1 do
+        -- finding the pivoting row
+        local maxNum = 0.0
+        local rowID_2_find_maxNum = i
+        for k = i, self_row, 1 do -- find the below rows
+            local absNum = math.abs(A.data[k][i])
+            --print("absNum", absNum)
+            if absNum > maxNum then
+                maxNum = absNum
+                rowID_2_find_maxNum = k
+            end
+        end
+        if maxNum < esp then
+            local failed = false
+            if i ~= self_row then
+                failed = true
+            else
+                for c = 1, self_column, 1 do
+                    if math.abs(A.data[i][c]) > esp then
+                        failed = false
+                        break
+                    else
+                        failed = true
+                    end
+                end
+            end
+            if failed then
+                print("[ERROR] this matrix is degenerate.")
+                return nil
+            end
+        end
+        -- switching the row
+        if rowID_2_find_maxNum ~= i then
+            -- pivoting P
+            local tmp_row = P.data[i]
+            P.data[i] = P.data[rowID_2_find_maxNum]
+            P.data[rowID_2_find_maxNum] = tmp_row
+            -- pivoting matrix A
+            tmp_row = A.data[i]
+            A.data[i] = A.data[rowID_2_find_maxNum]
+            A.data[rowID_2_find_maxNum] = tmp_row
+            -- calc det_P
+            det_P = det_P * -1
+        end
         for k = i, self_column, 1 do
             local sum = 0
             for j = 1, i, 1 do
                 sum = sum + (L.data[i][j] * U.data[j][k])
             end
-            U.data[i][k] = self.data[i][k] - sum
+            U.data[i][k] = A.data[i][k] - sum
         end
         for k = i, self_column, 1 do
             if i == k then
@@ -248,51 +329,53 @@ function mat_obj:LUdecompose()
                 for j = 1, i, 1 do
                     sum = sum + L.data[k][j] * U.data[j][i]
                 end
-                L.data[k][i] = (self.data[k][i] - sum) / U.data[i][i]
+                L.data[k][i] = (A.data[k][i] - sum) / U.data[i][i]
             end
         end
     end
-    return L, U
+    return L, U, P, det_P
 end
 
--- since A = L * U, thus: A^-1 = U^-1 * L^-1
+--function mat_obj:determinant()
+    --local ret = 0
+    --local row, column = self:size()
+    --if row ~= column then
+        --print(string.format("[ERROR] matrix <%sx%s> does NOT have determinant", row, column))
+        --return nil
+    --end
+--end
+
+local function lower_triangle_inverse(l)
+    local n, _ = l:size()
+    local ret = matrix.zeros(n, n)
+    for i = 1, n, 1 do
+        ret.data[i][i] = 1 / l.data[i][i]
+        for j = 1, i - 1, 1 do
+            local s = 0
+            for k = j, i - 1, 1 do
+                s = s + l.data[i][k] * ret.data[k][j]
+            end
+            ret.data[i][j] = -s * ret.data[i][i]
+        end
+    end
+    return ret
+end
+
+-- since PA = P * L * U, thus: A^-1 = U^-1 * L^-1 * P^-1, and P^T = P^-1
 -- matrix U^-1 & L^-1 can be caculated by Elementary row operations
 function mat_obj:inverse()
-    -- ref: https://stackoverflow.com/questions/420612/is-there-around-a-straightforward-way-to-invert-a-triangular-upper-or-lower-ma
-    local esp = 0.0001
-    local L, U = self:LUdecompose()
-    local n, _ = self:size()
-    for i = 1, n, 1 do
-        if math.abs(L.data[i][i]) <= esp or math.abs(U.data[i][i]) <= esp then
-            print("[ERROR] this matrix cannot be inversed().")
-            return nil
-        end
+    local L, U, P, _ = self:LUPdecompose()
+    local self_row, self_column = self:size()
+    if self_row ~= self_column then
+        print(string.format(
+            "[ERROR] matrix <%dx%d> does NOT have inversed matrix",
+            self_row, self_column)
+        )
+        return nil
     end
-    local l_inverse = matrix.zeros(n, n)
-    for i = 1, n, 1 do
-        l_inverse.data[i][i] = 1 / L.data[i][i]
-        for j = 1, i - 1, 1 do
-            local s = 0
-            for k = j, i - 1, 1 do
-                s = s + L.data[i][k] * l_inverse.data[k][j]
-            end
-            l_inverse.data[i][j] = -s * l_inverse.data[i][i]
-        end
-    end
-    local U_T = U:T()       -- U^-1 = (U^T) ^ -1
-    local ut_inverse = matrix.zeros(n, n)
-    for i = 1, n, 1 do
-        ut_inverse.data[i][i] = 1 / U_T.data[i][i]
-        for j = 1, i - 1, 1 do
-            local s = 0
-            for k = j, i - 1, 1 do
-                s = s + U_T.data[i][k] * ut_inverse.data[k][j]
-            end
-            ut_inverse.data[i][j] = -s * ut_inverse.data[i][i]
-        end
-    end
-    local u_inverse = ut_inverse:T()
-    return u_inverse * l_inverse
+    local l_inverse = lower_triangle_inverse(L)
+    local u_inverse = lower_triangle_inverse(U:T()):T()
+    return u_inverse * l_inverse * P:T()
 end
 -----------------------------------------------------
 
